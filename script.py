@@ -18,17 +18,31 @@ def obtener_token():
         return r.json().get('access_token')
     except: return None
 
-def consultar_tasa_1_dia(token):
-    url = "https://api.invertironline.com/api/v2/Cotizaciones/Cauciones/PESOS/1"
+# --- NUEVA FUNCIÓN DINÁMICA ---
+def consultar_tasa_dinamica(token):
+    # Ya no pedimos "/1", pedimos todo el panel de PESOS
+    url = "https://api.invertironline.com/api/v2/Cotizaciones/Cauciones/PESOS"
     headers = {'Authorization': f'Bearer {token}'}
     try:
         r = requests.get(url, headers=headers)
         if r.status_code == 200:
-            datos = r.json()
-            if datos and 'puntas' in datos[0] and datos[0]['puntas']:
-                return datos[0]['puntas'][0].get('tasa')
-        return None
-    except: return None
+            panel = r.json()
+            mejor_tasa = 0
+            mejor_plazo = ""
+            
+            # Recorremos todas las cauciones buscando la tasa más alta
+            for c in panel:
+                if c.get('puntas'):
+                    tasa_actual = c['puntas'][0].get('tasa', 0)
+                    if tasa_actual > mejor_tasa:
+                        mejor_tasa = tasa_actual
+                        mejor_plazo = c.get('plazo', 'N/A')
+            
+            # Si encontramos una tasa válida, devolvemos la tasa y los días
+            if mejor_tasa > 0:
+                return mejor_tasa, mejor_plazo
+        return None, None
+    except: return None, None
 
 def enviar_telegram(mensaje):
     token_tg = os.getenv('TELEGRAM_TOKEN')
@@ -48,8 +62,12 @@ def revisar_comandos():
             mensaje_recibido = update.get('message', {}).get('text', '').lower()
             
             if mensaje_recibido == '/tasa':
-                t = consultar_tasa_1_dia(obtener_token())
-                enviar_telegram(f"📊 La tasa actual es: *{t if t else 'Mercado cerrado'}%*")
+                tasa, plazo = consultar_tasa_dinamica(obtener_token()) # <- Actualizado acá
+                if tasa:
+                    enviar_telegram(f"📊 La mejor tasa actual es: *{tasa}%* (Plazo: {plazo} días)")
+                else:
+                    enviar_telegram("📊 Estado: *Mercado cerrado o sin puntas*")
+                    
             elif mensaje_recibido == '/status':
                 enviar_telegram("🤖 El bot está *Online* y monitoreando en la Raspberry Pi.")
     except: pass
@@ -65,12 +83,12 @@ while True:
     if ahora.weekday() <= 4 and 11 <= ahora.hour < 17:
         token = obtener_token()
         if token:
-            tasa = consultar_tasa_1_dia(token)
+            tasa, plazo = consultar_tasa_dinamica(token) # <- Actualizado acá
             if tasa:
                 for nivel in reversed(INTERES_TASAS):
                     if tasa >= nivel:
                         if ultimo_umbral_avisado != nivel:
-                            enviar_telegram(f"💰 *ALERTA*: Tasa en *{tasa}%* (Nivel {nivel}%)")
+                            enviar_telegram(f"💰 *ALERTA*: Tasa en *{tasa}%* a {plazo} días (Nivel {nivel}%)")
                             ultimo_umbral_avisado = nivel
                         break
                 if tasa < (ultimo_umbral_avisado - 5): ultimo_umbral_avisado = 0
